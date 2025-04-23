@@ -1,0 +1,6 @@
+@echo off
+echo Deleting old Docker containers and images...
+docker-compose down -v
+
+echo Starting the Docker containers...
+docker-compose up -d --remove-orphans --build
