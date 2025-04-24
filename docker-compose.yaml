@@ -2,7 +2,9 @@ version: '3.8'
 
 x-airflow-common:
   &airflow-common
-  image: apache/airflow:2.8.1
+  build:
+      context: ./airflow
+      dockerfile: Dockerfile
   environment:
     &airflow-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -13,22 +15,21 @@ x-airflow-common:
     AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-db:5432/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
   volumes:
-    - ./dags:/opt/airflow/dags
-    - ./logs:/opt/airflow/logs
-    - ./plugins:/opt/airflow/plugins
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./data/dum-data.csv:/opt/airflow/data/raw_data.csv
   depends_on:
     - airflow-db
     - airflow-redis
 
 services:
-
   airflow-init:
     <<: *airflow-common
     entrypoint: /bin/bash
     command: -c "airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
     depends_on:
       - airflow-db
-
 
   airflow-webserver:
     <<: *airflow-common
@@ -60,36 +61,78 @@ services:
 
   # Các service khác giữ nguyên
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-    ports:
-      - 2181:2181
 
   kafka:
-    image: confluentinc/cp-kafka:7.5.0
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
     depends_on:
       - zookeeper
-    ports:
-      - 9092:9092
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,DOCKER://kafka:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,DOCKER://0.0.0.0:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,DOCKER:PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
+  init-kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: init-kafka
+    depends_on:
+      - kafka
+    entrypoint: bash
+    command: -c "
+      echo '⏳ Waiting for Kafka...'; sleep 10;
+      kafka-topics --bootstrap-server kafka:29092 \
+        --create --if-not-exists \
+        --replication-factor 1 \
+        --partitions 1 \
+        --topic load_raw_data;
+      echo '🧠 Waiting for partition leader election...';
+      until kafka-topics --bootstrap-server kafka:29092 --describe --topic load_raw_data | grep -q 'Leader:'; do
+        echo '🔁 Still waiting for leader...'; sleep 2;
+      done;
+      echo '✅ Topic load_raw_data is ready!';"
+
+  kafka-ui:
+    image: obsidiandynamics/kafdrop
+    container_name: kafka-ui
+    restart: always
+    depends_on:
+      - kafka
+    ports:
+      - "9003:9000"
+    environment:
+      KAFKA_BROKER_CONNECT: kafka:29092
+      JVM_OPTS: "-Xms32M -Xmx64M"
+      SERVER_PORT: 9000
+
   spark-master:
-    image: bitnami/spark:latest
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
     environment:
       - SPARK_MODE=master
     ports:
       - 7077:7077
       - 8080:8080
     volumes:
-      - .:/opt/sentiment
+      - ./spark:/opt/sentiment
+      - ./spark/data/social_sentiment_cleaned:/data/social_sentiment_cleaned
 
   spark-worker:
-    image: bitnami/spark:latest
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
     depends_on:
       - spark-master
     environment:
@@ -98,9 +141,22 @@ services:
     ports:
       - 8081:8081
     volumes:
-      - .:/opt/sentiment
+      - ./spark:/opt/sentiment
+      - ./spark/data/social_sentiment_cleaned:/data/social_sentiment_cleaned
 
-  model-service:
+  spark-submit-job:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    command: >
+      /opt/bitnami/spark/bin/spark-submit --master spark://spark-master:7077 --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 /opt/sentiment/spark_transform.py
+    volumes:
+      - ./spark:/opt/sentiment
+      - ./spark/data/social_sentiment_cleaned:/data/social_sentiment_cleaned
+
+
+
+  model-sentiment-service:
     build:
       context: ./model_service
     ports:
@@ -130,40 +186,44 @@ services:
         tail -f /dev/null
       "
 
-  db:
-    image: postgres:13
-    environment:
-      POSTGRES_DB: metabase
-      POSTGRES_USER: metabase
-      POSTGRES_PASSWORD: metabase
-    ports:
-      - 5432:5432
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+  # db:
+  #   image: postgres:13
+  #   environment:
+  #     POSTGRES_DB: metabase
+  #     POSTGRES_USER: metabase
+  #     POSTGRES_PASSWORD: metabase
+  #   ports:
+  #     - 5432:5432
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
 
-  trino:
-    image: trinodb/trino
-    ports:
-      - "8082:8080"
-    volumes:
-      - ./trino:/etc/trino
+  # trino:
+  #   image: trinodb/trino
+  #   ports:
+  #     - "8082:8080"
+  #   volumes:
+  #     - ./trino:/etc/trino
 
 
-  metabase:
-    image: metabase/metabase:latest
-    ports:
-      - 3000:3000
-    environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: metabase
-      MB_DB_PORT: 5432
-      MB_DB_USER: metabase
-      MB_DB_PASS: metabase
-      MB_DB_HOST: db
-    depends_on:
-      - db
-    restart: unless-stopped
+  # metabase:
+  #   image: metabase/metabase:latest
+  #   ports:
+  #     - 3000:3000
+  #   environment:
+  #     MB_DB_TYPE: postgres
+  #     MB_DB_DBNAME: metabase
+  #     MB_DB_PORT: 5432
+  #     MB_DB_USER: metabase
+  #     MB_DB_PASS: metabase
+  #     MB_DB_HOST: db
+  #   depends_on:
+  #     - db
+  #   restart: unless-stopped
 
 volumes:
   minio_data:
   postgres_data:
+
+networks:
+  kafka-net:
+    driver: bridge

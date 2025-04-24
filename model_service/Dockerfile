@@ -12,4 +12,4 @@ RUN pip install --default-timeout=100 --no-cache-dir \
 
 COPY app.py .
 
-CMD ["python", "app.py"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5000"]
