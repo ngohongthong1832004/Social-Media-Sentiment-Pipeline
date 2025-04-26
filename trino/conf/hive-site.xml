@@ -1,0 +1,92 @@
+<configuration>
+  <!-- Metastore Thrift URI -->
+  <property>
+    <name>hive.metastore.uris</name>
+    <value>thrift://hive-metastore:9083</value>
+  </property>
+
+  <!-- JDBC connect tới MariaDB để lưu metastore -->
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:mysql://mariadb:3306/metastore_db?createDatabaseIfNotExist=true</value>
+  </property>
+
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>com.mysql.jdbc.Driver</value>
+  </property>
+
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>admin</value>
+  </property>
+
+  <property>
+    <name>javax.jdo.option.ConnectionPassword</name>
+    <value>admin</value>
+  </property>
+
+  <!-- Cho phép HiveServer2 tự tạo database nếu chưa có -->
+  <property>
+    <name>datanucleus.schema.autoCreateAll</name>
+    <value>true</value>
+  </property>
+
+  <!-- Cấu hình cho S3A (kết nối MinIO như S3) -->
+  <property>
+    <name>fs.s3a.access.key</name>
+    <value>admin123</value>
+  </property>
+
+  <property>
+    <name>fs.s3a.secret.key</name>
+    <value>admin123</value>
+  </property>
+
+  <property>
+    <name>fs.s3a.endpoint</name>
+    <value>http://minio:9000</value>
+  </property>
+
+  <property>
+    <name>fs.s3a.path.style.access</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>fs.s3a.connection.ssl.enabled</name>
+    <value>false</value>
+  </property>
+
+  <property>
+    <name>fs.s3a.impl</name>
+    <value>org.apache.hadoop.fs.s3a.S3AFileSystem</value>
+  </property>
+
+  <!-- Thêm để HiveServer2 phục vụ JDBC -->
+  <property>
+    <name>hive.server2.thrift.bind.host</name>
+    <value>0.0.0.0</value>
+  </property>
+
+  <property>
+    <name>hive.server2.transport.mode</name>
+    <value>binary</value>
+  </property>
+
+  <property>
+  <name>hive.server2.thrift.http.port</name>
+  <value>10001</value>
+  </property>
+
+  <property>
+    <name>hive.server2.thrift.port</name>
+    <value>10000</value>
+  </property>
+
+  <!-- Optional: fix warning SSL -->
+  <property>
+    <name>hive.server2.use.SSL</name>
+    <value>false</value>
+  </property>
+</configuration>

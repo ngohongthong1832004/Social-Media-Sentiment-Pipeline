@@ -64,7 +64,7 @@ def predict_batch(request: BatchRequest):
 
         labels = [sentiment_map[p] for p in preds]
         for text, label in zip(batch, labels):
-            print(f"[✅] Text: \"{text}\" → Sentiment: {label}")
+            print(f"[✅] Text: \"{text[:100]}\" → Sentiment: {label}")
         
         all_preds.extend(labels)
     

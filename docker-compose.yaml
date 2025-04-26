@@ -30,20 +30,28 @@ services:
     command: -c "airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
     depends_on:
       - airflow-db
+    networks:
+      - kafka-network
 
   airflow-webserver:
     <<: *airflow-common
     ports:
       - 8089:8080
     command: webserver
+    networks:
+    - kafka-network
 
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
+    networks:
+      - kafka-network
 
   airflow-worker:
     <<: *airflow-common
     command: celery worker
+    networks:
+      - kafka-network
 
   airflow-db:
     image: postgres:13
@@ -53,11 +61,15 @@ services:
       POSTGRES_DB: airflow
     ports:
       - 5433:5432
+    networks:
+      - kafka-network
 
   airflow-redis:
     image: redis:latest
     ports:
       - 6379:6379
+    networks:
+      - kafka-network
 
   # Các service khác giữ nguyên
   zookeeper:
@@ -67,6 +79,8 @@ services:
       - "2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - kafka-network
 
   kafka:
     image: confluentinc/cp-kafka:latest
@@ -83,6 +97,8 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,DOCKER:PLAINTEXT
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - kafka-network
 
   init-kafka:
     image: confluentinc/cp-kafka:latest
@@ -102,6 +118,8 @@ services:
         echo '🔁 Still waiting for leader...'; sleep 2;
       done;
       echo '✅ Topic load_raw_data is ready!';"
+    networks:
+      - kafka-network
 
   kafka-ui:
     image: obsidiandynamics/kafdrop
@@ -115,6 +133,8 @@ services:
       KAFKA_BROKER_CONNECT: kafka:29092
       JVM_OPTS: "-Xms32M -Xmx64M"
       SERVER_PORT: 9000
+    networks:
+      - kafka-network
 
   spark-master:
     build:
@@ -122,12 +142,17 @@ services:
       dockerfile: Dockerfile
     environment:
       - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master  
     ports:
       - 7077:7077
       - 8080:8080
     volumes:
       - ./spark:/opt/sentiment
       - ./spark/data/social_sentiment_cleaned:/data/social_sentiment_cleaned
+    networks:
+      - trino-network
+      - minio-network
+      - kafka-network
 
   spark-worker:
     build:
@@ -138,11 +163,16 @@ services:
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_EXECUTOR_MEMORY=2G
     ports:
       - 8081:8081
     volumes:
       - ./spark:/opt/sentiment
       - ./spark/data/social_sentiment_cleaned:/data/social_sentiment_cleaned
+    networks:
+      - trino-network
+      - minio-network
+      - kafka-network  # Added kafka-network
 
   spark-submit-job:
     build:
@@ -153,14 +183,20 @@ services:
     volumes:
       - ./spark:/opt/sentiment
       - ./spark/data/social_sentiment_cleaned:/data/social_sentiment_cleaned
-
-
+    depends_on:
+      - spark-master
+    networks:
+      - trino-network
+      - minio-network
+      - kafka-network  # Added kafka-network
 
   model-sentiment-service:
     build:
       context: ./model_service
     ports:
       - 5000:5000
+    networks:
+      - kafka-network  # Added kafka-network
     # restart: unless-stopped
 
   minio:
@@ -174,56 +210,146 @@ services:
       MINIO_ROOT_USER: admin123
       MINIO_ROOT_PASSWORD: admin123
       MINIO_REGION_NAME: us-east-1  # Added region name for MinIO
-    command: server --console-address ":9001" /data
+    # command: server --console-address ":9001" /data
     entrypoint: >
       /bin/bash -c "
         minio server --console-address ':9001' /data & 
         sleep 5 &&
         curl -sLO https://dl.min.io/client/mc/release/linux-amd64/mc &&
         chmod +x mc &&
-        ./mc alias set local http://localhost:9000 admin123 admin123 &&
+        ./mc alias set local http://minio:9000 admin123 admin123 &&
         ./mc mb --ignore-existing local/sentiment-results &&
         tail -f /dev/null
       "
+    networks:
+      - trino-network
 
-  # db:
-  #   image: postgres:13
-  #   environment:
-  #     POSTGRES_DB: metabase
-  #     POSTGRES_USER: metabase
-  #     POSTGRES_PASSWORD: metabase
-  #   ports:
-  #     - 5432:5432
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: metabase
+      POSTGRES_USER: metabase
+      POSTGRES_PASSWORD: metabase
+    ports:
+      - 5432:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  
 
-  # trino:
-  #   image: trinodb/trino
-  #   ports:
-  #     - "8082:8080"
-  #   volumes:
-  #     - ./trino:/etc/trino
+  metabase:
+    image: metabase/metabase
+    ports:
+      - "3000:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: metabase
+      MB_DB_PASS: metabase
+      MB_DB_HOST: db
+    depends_on:
+      - db
+      - trino
 
 
-  # metabase:
-  #   image: metabase/metabase:latest
-  #   ports:
-  #     - 3000:3000
-  #   environment:
-  #     MB_DB_TYPE: postgres
-  #     MB_DB_DBNAME: metabase
-  #     MB_DB_PORT: 5432
-  #     MB_DB_USER: metabase
-  #     MB_DB_PASS: metabase
-  #     MB_DB_HOST: db
-  #   depends_on:
-  #     - db
-  #   restart: unless-stopped
+  # ========================================================================================================
+
+
+  trino:
+    hostname: trino
+    image: 'trinodb/trino:351'
+    ports:
+      - '8086:8080'
+    volumes:
+      - ./trino/etc:/usr/lib/trino/etc:ro
+    networks:
+      - trino-network
+      - minio-network
+
+  mariadb:
+    hostname: mariadb
+    image: mariadb:10.5.8
+    ports:
+      - 3306:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: admin
+      MYSQL_DATABASE: metastore_db
+    networks:
+      - trino-network
+      - minio-network
+  hive-metastore:
+    hostname: hive-metastore
+    image: 'bitsondatadev/hive-metastore:latest'
+    ports:
+      - '9083:9083' # Metastore Thrift
+    volumes:
+      - ./trino/conf/metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro
+      - ./trino/conf/core-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/core-site.xml:ro
+      - ./trino/conf/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+    environment:
+      METASTORE_DB_HOSTNAME: mariadb
+    depends_on:
+      - mariadb
+      - minio
+    networks:
+      - trino-network
+      - minio-network
+
+  hive-server:
+    build:
+      context: ./hive
+      dockerfile: Dockerfile
+    container_name: hive-server
+    environment:
+      HIVE_METASTORE_URI: thrift://hive-metastore:9083
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+    depends_on:
+      - hive-metastore
+      - minio
+    ports:
+      - "10000:10000" # HiveServer2 JDBC port
+    volumes:
+      - ./trino/conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./trino/conf/core-site.xml:/opt/hive/conf/core-site.xml:ro
+      # - ./trino/conf/metastore-site.xml:/opt/hive/conf/hive-site.xml:ro
+      - ./trino/conf/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+    networks:
+      - trino-network
+  
+  hive-client:
+    build:
+      context: ./hive
+      dockerfile: Dockerfile
+    container_name: hive-client
+    ports:
+      - "10001:10000"
+    environment:
+      HIVE_METASTORE_URI: thrift://hive-metastore:9083
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+    networks:
+      - trino-network
+    depends_on:
+      - hive-server
+      - minio
+    volumes:
+      - ./trino/conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./trino/conf/core-site.xml:/opt/hive/conf/core-site.xml:ro
+      # - ./trino/conf/metastore-site.xml:/opt/hive/conf/hive-site.xml:ro
+      - ./trino/conf/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+    stdin_open: true
+    tty: true
+
 
 volumes:
   minio_data:
   postgres_data:
 
 networks:
-  kafka-net:
+  kafka-network:
+    driver: bridge
+  trino-network:
+    driver: bridge
+  minio-network:
     driver: bridge
