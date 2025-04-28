@@ -140,3 +140,4 @@ WITH (
     format = 'PARQUET'
 );
 '''
+
