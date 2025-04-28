@@ -234,25 +234,76 @@ services:
       - 5432:5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - metabase-network
+      - trino-network  # Added trino-network for db service
   
 
-  metabase:
-    image: metabase/metabase
+  # metabase:
+  #   image: metabase/metabase-enterprise
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     MB_DB_TYPE: postgres
+  #     MB_DB_DBNAME: metabase
+  #     MB_DB_PORT: 5432
+  #     MB_DB_USER: metabase
+  #     MB_DB_PASS: metabase
+  #     MB_DB_HOST: db
+  #     MB_ENTERPRISE_EDITION: true 
+  #     MB_EDITION: enterprise
+  #   volumes:
+  #     - ./metabase/add_trino_to_metabase.sh:/docker-entrypoint-initdb.d/add_trino_to_metabase.sh
+  #   # command: /bin/sh -c "sleep 5 && bash /docker-entrypoint-initdb.d/add_trino_to_metabase.sh && /app/run_metabase.sh"
+  #   depends_on:
+  #     - db
+  #     - trino
+  #   networks:
+  #     - trino-network  # Added trino-network
+  #     - metabase-network
+
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
+    container_name: superset
     ports:
-      - "3000:3000"
+      - "8088:8088"
     environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: metabase
-      MB_DB_PORT: 5432
-      MB_DB_USER: metabase
-      MB_DB_PASS: metabase
-      MB_DB_HOST: db
-    depends_on:
-      - db
-      - trino
+      - SUPERSET_ENV=production
+      - SUPERSET_LOAD_EXAMPLES=no
+      - SUPERSET_DATABASE_URI=postgresql+psycopg2://metabase:metabase@db:5432/metabase
+    volumes:
+      - ./superset/superset_home:/app/superset_home
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py
+      - ./superset/preloaded.yaml:/app/pythonpath/preloaded.yaml  # thêm dòng này
+      - ./superset/setup_database.py:/app/pythonpath/setup_database.py
+    command: >
+      /bin/sh -c "
+      superset db upgrade &&
+      superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin || true &&
+      superset init &&
+      python /app/pythonpath/setup_database.py &&
+      superset run -h 0.0.0.0 -p 8088"
+    networks:
+      - trino-network
+
+
 
 
   # ========================================================================================================
+
+  init-trino:
+    image: curlimages/curl:latest
+    depends_on:
+      - trino
+    volumes:
+      - ./trino/init_sentiment_table.sql:/init_sentiment_table.sql:ro
+      - ./trino/init_trino.sh:/init_trino.sh:ro
+    entrypoint: ["/bin/sh", "/init_trino.sh"]
+    networks:
+      - trino-network
+      - minio-network
 
 
   trino:
@@ -352,4 +403,6 @@ networks:
   trino-network:
     driver: bridge
   minio-network:
+    driver: bridge
+  metabase-network:
     driver: bridge

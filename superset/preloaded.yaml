@@ -1,0 +1,8 @@
+databases:
+  - database_name: Trino
+    sqlalchemy_uri: trino://admin@trino:8080
+    extra:
+      metadata_params: {}
+      engine_params: {}
+      metadata_cache_timeout: {}
+      schemas_allowed_for_csv_upload: []
