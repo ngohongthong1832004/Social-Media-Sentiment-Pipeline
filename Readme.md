@@ -99,10 +99,11 @@ docker-compose up --build
 
 ## 🔥 Kế hoạch phát triển mở rộng
 
-- [v] Multi-language Sentiment Analysis (EN, VI, JP...)
+- [x] Multi-language Sentiment Analysis (EN, VI, JP...)
 - [ ] Monitoring bằng Prometheus + Alert nếu dữ liệu sentiment tiêu cực tăng mạnh
 - [ ] Auto retraining pipeline khi phát hiện data drift
 - [ ] Giao diện quản lý pipeline bằng Streamlit
+- [ ] Tự động tạo schema với Trino
 
 ---
 
